@@ -6,16 +6,23 @@ import (
 	"encoding/csv"
 	"log/slog"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/tidwall/sjson"
+
+	_ "github.com/joho/godotenv/autoload"
 )
 
 func init() {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 }
+
+var kafkaTopic = "users"
 
 func Test_publisher(t *testing.T) {
 	slog.Debug("start publisher()")
@@ -25,7 +32,7 @@ func Test_publisher(t *testing.T) {
 	}()
 
 	// read csv
-	csvRaw, err := os.ReadFile("data/MOCK_DATA.csv")
+	csvRaw, err := os.ReadFile("data/10000.synthetic_data_2026-02-11.csv")
 	if err != nil {
 		slog.Error(err.Error())
 		return
@@ -39,14 +46,22 @@ func Test_publisher(t *testing.T) {
 	}
 
 	// build messages
-	topic := "users"
 	dataToInsert := []kafka.Message{}
 	writer := &kafka.Writer{
-		Addr:                   kafka.TCP(os.Getenv("KAFKA_BROKER")),
-		Topic:                  topic,
+		Addr:                   kafka.TCP(strings.Split(os.Getenv("KAFKA_BROKER"), ",")...),
+		Topic:                  kafkaTopic,
 		Balancer:               &kafka.LeastBytes{},
 		AllowAutoTopicCreation: true,
 	}
+	go func() {
+		exit := make(chan os.Signal, 1)
+		signal.Notify(exit, os.Interrupt, syscall.SIGTERM)
+		<-exit
+		if errClose := writer.Close(); errClose != nil {
+			slog.Error(errClose.Error())
+		}
+		slog.Debug("Done")
+	}()
 
 	header := []string{}
 	for index, datum := range data {
@@ -77,9 +92,5 @@ func Test_publisher(t *testing.T) {
 		slog.Error(err.Error())
 		return
 	}
-
-	if err := writer.Close(); err != nil {
-		slog.Error(err.Error())
-		return
-	}
+	slog.Debug("Insert done", "len data", len(dataToInsert))
 }
